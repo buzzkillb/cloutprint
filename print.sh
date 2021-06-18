@@ -18,11 +18,9 @@ echo "- print out all posts to the screen"
 echo
 echo "To be able to do this, it needs to make sure you have the following tools installed:"
 echo "- Package manager: homebrew"
-echo "- JSON cli: jq"
+echo "- cli tools: jq & wget"
 echo "- Digital Ocean CLI: doctl"
 echo
-echo "Press Enter to proceed, or CMD+C to cancel ..."
-read
 
 # check were on macos
 if [[ ! "$OSTYPE" == "darwin"* ]]; then
@@ -32,45 +30,21 @@ fi
 
 # install homebrew
 echo
-echo "Making sure Homebrew is installed"
-if ! command -v brew &> /dev/null
-then
-    echo "Installing..."
-    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-    echo "[ok] installed"
-else   
-    echo "[ok] already installed"
-fi
+echo "Need to make sure you have a few apps installed."
+echo "Press enter to start"
+read
 
-# install cli
+echo "Installing Homebrew"
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 echo
-echo "Do we have DOCTL?"
-if ! command -v doctl &> /dev/null
-then
-    echo "Installing doctl tool for Digital Ocean"
-    brew install doctl
-    echo "[ok] DO cli installed"
-else
-    echo "[ok] DO cli already installed"
-fi
 
-# install jq
-echo
-echo "Do we have jq tool?"
-if ! command -v jq &> /dev/null
-then
-    echo "Installing..."
-    brew install jq
-    echo "[ok] jq installed"
-else
-    echo "[ok] jq already installed"
-fi
+echo "Installing doctl, jq and wget tool for Digital Ocean"
+brew install doctl
+brew install doctl jq wget 
 
 # configure account
 echo
 echo "Please authenticate the DO cli tool to your account"
-
-#TODO check if active, if not trigger setup
 
 if ! DOAUTH=(`doctl auth list | sed -e "s/(current)//"`); then
     echo "You are not logged into your DO account."
@@ -145,7 +119,9 @@ echo
 echo "[ok] droplet created"
 
 #is server up
-BLOCK=0
+DROPLETIP="167.71.15.160"
+
+BLOCK=6044 #this was block with first post, so lets start there
 MAXHEIGHT=$(curl -s https://api.bitclout.com/api/v1 | jq '.Header.Height')
 echo
 echo "There are $MAXHEIGHT blocks on Bitclout."
@@ -167,36 +143,59 @@ until [ "$BLOCK" -eq "$MAXHEIGHT" ]; do
         echo -ne "Just a quick sync with Bitcoin! You wont even see this   \r"
         sleep 2
         continue
+    elif [ "$STATE" = "SYNCING_BLOCKS" ]; then
+        if [ "$BLOCKS" -gt 28734 ]; then
+            LEFT="$(($BLOCKS-28734))"
+            echo -ne "$STATE: Load Empty Blocks First, $LEFT remaining         \r"
+            continue
+        else
+            # OK now show some posts while we sync remainder
+            POSTS=$(curl -s "http://$DROPLETIP/api/v0/get-posts-stateless" -X POST -H 'Content-Type: application/json' --data-raw '{ "ReaderPublicKeyBase58Check":"", "PostHashHex":"", "NumToFetch":100, "GetPostsForFollowFeed": false, "GetPostsForGlobalWhitelist": false, "GetPostsByClout": false, "OrderBy": "oldest", "StartTstampSecs": 0, "PostContent": "", "FetchSubcomments": false, "MediaRequired": false, "PostsByCloutMinutesLookback": 0, "AddGlobalFeedBool": false }' | jq -c '.PostsFound[]')
+            
+            while read -r POST
+            do
+                USER=$(jq -r '.ProfileEntryResponse.Username' <<< $POST)
+                DATE=$(jq -r '.TimestampNanos / 1000000000 | strftime("on %d %m %Y at %H:%M:%S (UTC)")' <<< $POST)
+                BODY=$(jq -r '.Body' <<< $POST)
+
+                echo "🗣  $USER posted on $DATE:"
+                printf "%s\n" "$BODY"
+                echo
+                sleep 2
+            done <<< "$POSTS"
+        fi
     fi
 
-    if [ "$BLOCKS" -gt 28734 ]; then
-        LEFT="$(($BLOCKS-28734))"
-        echo -ne "$STATE: Load Empty Blocks First, $LEFT remaining         \r"
-        continue
-    fi
-
-    echo "[SYNC STATUS] $STATE / $BLOCKS left"
+    echo
+    echo "[SYNC STATUS] $STATE at Height $MAXHEIGHT, with index at $TSINDEX"
     echo
 
     # if there are indexed blocks, get the posts
-    if [ "$TSINDEX" -lt "$BLOCK" ]; then
-        echo "Downloading block $BLOCK ..."
-        BLOCKDATA=$(curl -s "http://$DROPLETIP/api/v1/block" -X 'POST' -H 'Content-Type: application/json' --data-binary "{\"Height\":${BLOCK}, \"FullBlock\":true}")
-        POSTS=$(jq '.Transactions[] | select(.TransactionType="SUBMIT_POST") | .TransactionMetaData' <<< $BLOCKDATA )
-        BLOCK=$((BLOCK+1))
-    else
-        POSTS=$(curl -s "http://$DROPLETIP/api/v0/get-posts-stateless" -X POST -H 'Content-Type: application/json' --data-raw '{ "ReaderPublicKeyBase58Check":"", "PostHashHex":"", "NumToFetch":100, "GetPostsForFollowFeed": false, "GetPostsForGlobalWhitelist": false, "GetPostsByClout": false, "OrderBy": "oldest", "StartTstampSecs": 0, "PostContent": "", "FetchSubcomments": false, "MediaRequired": false, "PostsByCloutMinutesLookback": 0, "AddGlobalFeedBool": false }' | jq -c '.PostsFound[]')
-        
-        while read -r POST
-        do
-            USER=$(jq -r '.ProfileEntryResponse.Username' <<< $POST)
-            DATE=$(jq -r '.TimestampNanos / 1000000000 | strftime("on %d %m %Y at %H:%M:%S (UTC)")' <<< $POST)
-            BODY=$(jq -r '.Body' <<< $POST)
+    until [ $BLOCK -ge $MAXHEIGHT ]; do
+        if [ $TSINDEX -gt $BLOCK ]; then
+            BLOCKDATA=$(curl -s "http://$DROPLETIP/api/v1/block" -X 'POST' -H 'Content-Type: application/json' --data-binary "{\"Height\":${BLOCK}, \"FullBlock\":true}")
+            POSTS=$(jq -r '.Transactions[] | select(.TransactionType=="SUBMIT_POST") | .TransactionMetadata.SubmitPostTxindexMetadata.PostHashBeingModifiedHex' <<< $BLOCKDATA )
+            if [ ! -z "$POSTS" ]; then
+                while read -r POSTID
+                do
+                    POST=$(curl -s "http://$DROPLETIP/api/v0/get-single-post" -X POST -H 'Content-Type: application/json' --data-raw "{ \"ReaderPublicKeyBase58Check\":\"\", \"PostHashHex\":\"$POSTID\",  \"FetchParents\": false, \"CommentOffset\": 0, \"CommentLimit\": 0, \"AddGlobalFeedBool\": false }" | jq -c '.PostFound')
+                    if [ ! -z "$POST" ] && [ ! "$POST" = "null" ]; then
+                        USER=$(jq -r '.ProfileEntryResponse.Username' <<< $POST)
+                        DATE=$(jq -r '.TimestampNanos / 1000000000 | strftime("on %d %m %Y at %H:%M:%S (UTC)")' <<< $POST)
+                        BODY=$(jq -r '.Body' <<< $POST)
 
-            echo "🗣  $USER posted on $DATE:"
-            printf "%s\n" "$BODY"
-            echo
-            sleep 2
-        done <<< "$POSTS"
-    fi
+                        echo "🗣  $USER posted on $DATE:"
+                        printf "%s\n" "$BODY"
+                        echo
+                    fi
+                done <<< "$POSTS"
+            fi
+            BLOCK=$((BLOCK+1))
+        else
+            echo -ne "WAITING FOR INDEXED BLOCKS: $BLOCK vs $TSINDEX       /r"
+        fi
+    done
 done
+
+echo 
+echo "DONE!!"

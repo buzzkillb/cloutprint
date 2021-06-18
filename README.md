@@ -122,5 +122,6 @@ Here are some other things you could help with:
 - [ ] Show post stats 
 - [ ] Launch a few tmux windows each monitoring different stats as the chain syncs
 - [ ] Support Linux and Windows
+- [ ] Dump posts into Redis as per [this request](https://bitclout.com/posts/85e53038e1e98903d583722b0112b318fbc4412591e2ee42b1c65ad7670aeac7)
 
 Feel free to submit a PR for these things.
