@@ -160,18 +160,18 @@ until [ "$BLOCK" -eq "$MAXHEIGHT" ]; do
     TSINDEX=$(jq -r '.LatestTxIndexHeight' <<< $NODESTATUS)
 
     if [ "$STATE" = "SYNCING_HEADERS" ]; then
-        echo -ne "$STATE: $HEADERS remaining...    \r"
-        sleep 10
+        echo -ne "$STATE: $HEADERS remaining...                            \r"
+        sleep 2
         continue
     elif [ "$STATE" = "SYNCING_BITCOIN" ]; then
         echo -ne "Just a quick sync with Bitcoin! You wont even see this   \r"
-        sleep 10
+        sleep 2
         continue
     fi
 
     if [ "$BLOCKS" -gt 28734 ]; then
         LEFT="$(($BLOCKS-28734))"
-        echo -ne "$STATE: Load Empty Blocks First, $LEFT remaining     \r"
+        echo -ne "$STATE: Load Empty Blocks First, $LEFT remaining         \r"
         continue
     fi
 
